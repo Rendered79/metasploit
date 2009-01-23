@@ -1,0 +1,258 @@
+#!/usr/bin/env ruby
+#
+# This user interface allows users to interact with the framework through a
+# command line interface (CLI) rather than having to use a prompting console
+# or web-based interface.
+#
+
+msfbase = File.symlink?(__FILE__) ? File.readlink(__FILE__) : __FILE__
+$:.unshift(File.join(File.dirname(msfbase), 'lib'))
+$:.unshift(ENV['MSF_LOCAL_LIB']) if ENV['MSF_LOCAL_LIB']
+
+require 'rex'
+require 'msf/ui'
+require 'msf/base'
+
+Indent = '   ' 
+
+if(RUBY_PLATFORM =~ /mswin32/)
+	$stderr.puts "[*] The msfconsole interface is not supported on the native Windows Ruby\n"
+	$stderr.puts "    interpreter. Things will break, exploits will fail, payloads will not\n"
+	$stderr.puts "    be handled correctly. Please use the msfweb 'console' or install \n"
+	$stderr.puts "    Cygwin or Linux in VMWare.\n\n"
+end
+
+# Initialize the simplified framework instance.
+$framework = Msf::Simple::Framework.create
+
+if ($framework.modules.failed.length > 0)
+  print("Warning: The following modules could not be loaded!\n\n")
+  $framework.modules.failed.each_pair do |file, err|
+    print("\t#{file}: #{err.to_s}\n\n")
+  end
+end
+
+def usage (str = nil, extra = nil)
+	tbl = Rex::Ui::Text::Table.new(
+		'Header'  => "Usage: #{$0} <exploit_name> <option=value> [mode]",
+		'Indent'  => 4,
+		'Columns' => ['Mode', 'Description']
+	)
+
+	tbl << ['(H)elp', "You're looking at it baby!"]
+	tbl << ['(S)ummary', 'Show information about this module']
+	tbl << ['(O)ptions', 'Show available options for this module']
+	tbl << ['(A)dvanced', 'Show available advanced options for this module']
+	tbl << ['(I)DS Evasion', 'Show available ids evasion options for this module']
+	tbl << ['(P)ayloads', 'Show available payloads for this module']
+	tbl << ['(T)argets', 'Show available targets for this exploit module']
+	tbl << ['(AC)tions', 'Show available actions for this auxiliary module']
+	tbl << ['(C)heck', 'Run the check routine of the selected module']
+	tbl << ['(E)xecute', 'Execute the selected module']
+
+	$stdout.puts "Error: #{str}\n\n" if str
+	$stdout.puts tbl.to_s + "\n"
+	$stdout.puts extra + "\n" if extra
+
+	exit
+end
+
+if (ARGV.length < 1)
+	ext = ''
+	
+	tbl = Rex::Ui::Text::Table.new(
+		'Header'  => 'Exploits',
+		'Indent'  => 4,
+		'Columns' => [ 'Name', 'Description' ])
+
+	$framework.exploits.each_module { |name, mod|
+		tbl << [  'exploit/' + name, mod.new.name ]
+	}
+	ext << tbl.to_s + "\n"
+	
+	tbl = Rex::Ui::Text::Table.new(
+		'Header'  => 'Auxiliary',
+		'Indent'  => 4,
+		'Columns' => [ 'Name', 'Description' ])
+
+	$framework.auxiliary.each_module { |name, mod|
+		tbl << [ 'auxiliary/' + name, mod.new.name ]
+	}
+	
+	ext << tbl.to_s + "\n"
+	
+	usage(nil, ext)
+end
+
+# Get the module name we'll be using
+exploit_name = ARGV.shift
+exploit      = nil
+module_class = "exploit"
+
+if(exploit_name == "-h")
+	usage()
+end
+
+# Process special var/val pairs...
+Msf::Ui::Common.process_cli_arguments($framework, ARGV)
+
+# Determine what type of module it is
+case exploit_name
+when /exploit\/(.*)/
+	exploit = $framework.exploits.create($1)
+	module_class = 'exploit'
+	
+when /auxiliary\/(.*)/
+	exploit = $framework.auxiliary.create($1)
+	module_class = 'auxiliary'
+
+else
+	exploit = $framework.exploits.create(exploit_name)
+
+end
+
+
+
+if (exploit == nil)
+	usage("Invalid module: #{exploit_name}")
+end
+
+exploit.init_ui(
+	Rex::Ui::Text::Input::Stdio.new, 
+	Rex::Ui::Text::Output::Stdio.new
+)
+			
+# Evalulate the command (default to "help")
+mode = ARGV.pop || 'h'
+
+# Import options
+exploit.datastore.import_options_from_s(ARGV.join('_|_'), '_|_')
+
+
+# Initialize associated modules
+payload = nil
+encoder = nil
+nop     = nil
+
+if (exploit.datastore['PAYLOAD'])
+	payload = $framework.payloads.create(exploit.datastore['PAYLOAD'])
+	payload.datastore.import_options_from_s(ARGV.join('_|_'), '_|_')
+end
+
+if (exploit.datastore['ENCODER'])
+	encoder = $framework.encoders.create(exploit.datastore['ENCODER'])
+	encoder.datastore.import_options_from_s(ARGV.join('_|_'), '_|_')
+end
+
+if (exploit.datastore['NOP'])
+	nop = $framework.nops.create(exploit.datastore['NOP'])
+	nop.datastore.import_options_from_s(ARGV.join('_|_'), '_|_')
+end
+
+case mode.downcase
+	when 'h'
+		usage
+	when "s"
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_module(exploit, Indent))
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_module(payload, Indent)) if payload
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_module(encoder, Indent)) if encoder
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_module(nop, Indent)) if nop
+		
+	when "o"
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_options(exploit, Indent))
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_options(payload, Indent)) if payload
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_options(encoder, Indent)) if encoder
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_options(nop, Indent)) if nop		
+	when "a"
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_advanced_options(exploit, Indent))
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_advanced_options(payload, Indent)) if payload
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_advanced_options(encoder, Indent)) if encoder
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_advanced_options(nop, Indent)) if nop		
+	when "i"
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_evasion_options(exploit, Indent))
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_evasion_options(payload, Indent)) if payload
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_evasion_options(encoder, Indent)) if encoder
+		$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_evasion_options(nop, Indent)) if nop		
+	when "p"
+		if (module_class == 'exploit')
+			$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_compatible_payloads(exploit, Indent, "Compatible payloads"))
+		else
+			$stdout.puts("\nError: This type of module does not support payloads")
+		end
+	when "t"
+		if (module_class == 'exploit')
+			$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_exploit_targets(exploit, Indent))
+		else
+			$stdout.puts("\nError: This type of module does not support targets")
+		end	
+	when "ac"
+		if (module_class == 'auxiliary')
+			$stdout.puts("\n" + Msf::Serializer::ReadableText.dump_auxiliary_actions(exploit, Indent))
+		else
+			$stdout.puts("\nError: This type of module does not support actions")
+		end	
+	when "c"
+		if (module_class == 'exploit')
+			begin
+				if (code = exploit.check_simple(
+					'LocalInput'    => Rex::Ui::Text::Input::Stdio.new,
+					'LocalOutput'   => Rex::Ui::Text::Output::Stdio.new))
+					stat = (code == Msf::Exploit::CheckCode::Vulnerable) ? '[+]' : '[*]'
+
+					$stdout.puts("#{stat} #{code[1]}")
+				else
+					$stderr.puts("Check failed: The state could not be determined.")
+				end
+			rescue
+				$stderr.puts("Check failed: #{$!}")
+			end
+		else
+			$stdout.puts("\nError: This type of module does not support the check feature")
+		end
+	when "e"
+	
+		case module_class
+		when 'exploit'	
+			begin
+				session = exploit.exploit_simple(
+					'Encoder'       => exploit.datastore['ENCODER'],
+					'Target'        => exploit.datastore['TARGET'],
+					'Payload'       => exploit.datastore['PAYLOAD'],
+					'Nop'           => exploit.datastore['NOP'],
+					'LocalInput'    => Rex::Ui::Text::Input::Stdio.new,
+					'LocalOutput'   => Rex::Ui::Text::Output::Stdio.new,
+					'ForceBlocking' => true)
+
+				if (session)
+					$stdout.puts("[*] #{session.desc} session #{session.name} opened (#{session.tunnel_to_s})\n\n")
+
+					session.interact(
+						Rex::Ui::Text::Input::Stdio.new,
+						Rex::Ui::Text::Output::Stdio.new
+					)
+				end
+
+			rescue
+				$stderr.puts("Exploit failed: #{$!}")
+				$stderr.puts("Backtrace:")
+				$stderr.puts($!.backtrace.join("\n"))
+			end
+		when 'auxiliary'
+			begin
+				exploit.run_simple(
+					'Encoder'       => exploit.datastore['ENCODER'],
+					'Action'        => exploit.datastore['ACTION'],
+					'LocalInput'    => Rex::Ui::Text::Input::Stdio.new,
+					'LocalOutput'   => Rex::Ui::Text::Output::Stdio.new,
+					'ForceBlocking' => true)
+			rescue
+				$stderr.puts("Auxiliary failed: #{$!}")
+				$stderr.puts("Backtrace:")
+				$stderr.puts($!.backtrace.join("\n"))
+			end		
+		end
+	else
+		usage("Invalid mode #{mode}")
+end
+
+$stdout.puts

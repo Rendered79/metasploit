@@ -1,0 +1,82 @@
+#!/usr/bin/env ruby
+#
+# This user interface provides users with a web-based interface to the framework
+#
+
+msfbase = File.symlink?(__FILE__) ? File.readlink(__FILE__) : __FILE__
+$:.unshift(File.join(File.dirname(msfbase), 'lib'))
+$:.unshift(ENV['MSF_LOCAL_LIB']) if ENV['MSF_LOCAL_LIB']
+
+
+require 'msf/base'
+require 'rex'
+require 'stringio'
+
+
+
+msfroot = File.join(File.dirname(msfbase), 'data', 'msfweb')
+Dir.chdir(msfroot)
+
+msfserv = File.join('script', 'server')
+
+# Declare the argument parser for msfweb
+arguments = Rex::Parser::Arguments.new(
+	"-a" => [ true,  "Bind to this IP address instead of loopback"          ],
+	"-p" => [ true,  "Bind to this port instead of 55555"                   ],
+	"-d" => [ false, "Daemonize the web server"                             ],
+	"-s" => [ false, "Automatically open the browser"                       ],
+	"-h" => [ false, "Help banner"                                          ])
+
+opts = {}
+background = false
+browser_start = false
+
+# Parse command line arguments.
+arguments.parse(ARGV) { |opt, idx, val|
+	case opt
+		when "-a"
+			opts['ServerHost'] = val
+		when "-p"
+			opts['ServerPort'] = val
+		when "-v"
+			opts['LogLevel'] = val
+		when "-d"
+			background = true
+		when "-s"
+			browser_start = true
+		when "-h"
+			print(
+				"\nUsage: msfweb <options>\n" +
+				arguments.usage)
+			exit
+	end
+}
+
+
+host = (opts['ServerHost'] || '127.0.0.1')
+port = (opts['ServerPort'] || '55555')
+
+
+# This is stupid, but we need to override the ARGV constant
+
+ostderr = $stderr
+$stderr = StringIO.new
+
+ARGV = [
+	'-p', port, 
+	'-b', host,
+	'-e', 'production',
+	(background ? '-d' : '')
+]
+
+$stderr.close
+$stderr = ostderr
+
+$browser_url   = "http://#{host}:#{port}/"
+$browser_start = browser_start
+
+$stderr.puts ""
+$stderr.puts "[*] Starting msfweb v#{Msf::Framework::Version} on #{$browser_url}"
+$stderr.puts ""
+
+load(msfserv)
